@@ -1,0 +1,390 @@
+
+import pandas as pd
+import os
+import numpy as np
+import string # for list of punctuation
+from nltk.tokenize import RegexpTokenizer
+from nltk.stem.porter import PorterStemmer
+from nltk.tag import pos_tag
+from nltk.corpus import stopwords
+import re
+from nltk.tokenize import word_tokenize
+from nltk.tokenize import TweetTokenizer
+from nltk.stem import WordNetLemmatizer
+import gensim.downloader as api
+import nltk.corpus
+from collections import Counter
+from nltk.tokenize import regexp_tokenize
+from nltk.tokenize import TweetTokenizer
+import unidecode
+
+
+
+# stopwords.words('english')
+
+"""----------------------------------loading and processing twitter data--------------------------------"""
+
+
+
+tweets_smell = pd.read_csv("./raw_tweets.csv")
+tweets_smell = tweets_smell[['id', 'date', 'time','timezone','user_id','tweet','mentions','urls', 'hashtags',
+                                         'place','photos','hashtags', 'near']]
+# print(len(tweets_smell.place.unique()))
+
+
+"""Delete rows where values in column of "place" contains Indonesia"""
+non_sg=['Indonesia','Johor','Malaysia','Kepulauan Riau','South Africa']
+tweets_smell = tweets_smell[~tweets_smell.place.str.contains('|'.join(non_sg),na=False)]
+# print(len(tweets_smell_new.place.unique()))
+
+
+"""check unique tweet ids and unique tweets"""
+# print(len(tweets_smell_new.id.unique()))
+# print(len(tweets_smell_new.tweet.unique()))
+
+"""------------------------------------------Tokenization of  twitter data--------------------------------"""
+
+
+"""two ways of tokenization
+       TweetTokenizer on raw tweet
+       regular expression based tokenization 
+"""
+
+#TweetTokenizer for raw tweets
+tknzr = TweetTokenizer()
+tweets_smell['tweets_tokens'] = [tknzr.tokenize(t) for t in tweets_smell["tweet"]]
+print(len(tweets_smell['tweets_tokens']))
+
+
+
+
+#tokenizing only words in tweets
+pattern1 = r"\w+"
+tweets_smell['word_only_tokens'] = [regexp_tokenize(t, pattern1) for t in tweets_smell["tweet"]]
+print(len(tweets_smell['word_only_tokens']))
+
+
+
+#make dictionary of tokens for each tweet
+
+def token_dict(df):
+    tweets_tokens_dicts = {}
+    word_only_tokens_dicts={}
+    for index, row in df.iterrows():
+        dic={row['id']:row['tweets_tokens']}
+        tweets_tokens_dicts.update(dic)
+        dic1={row['id']:row['word_only_tokens']}
+        word_only_tokens_dicts.update(dic1)
+    return tweets_tokens_dicts,word_only_tokens_dicts
+
+tweets_tokens_dict, word_only_tokens_dict=token_dict(tweets_smell)
+print(tweets_tokens_dict)
+
+
+
+
+"""   create new dataframe that each row is for each token
+                Splits a column with lists into rows
+
+Keyword arguments:
+    df -- dataframe
+    target_column -- name of column that contains lists        
+"""
+
+def split_data_frame_list(df, target_column, index_column):
+    # create a new dataframe with each item in a seperate column, dropping rows with missing values
+    col_df = pd.DataFrame(df[target_column].tolist(), index=df[index_column])
+
+    # create a series with columns stacked as rows
+    stacked = col_df.stack()
+
+    # rename last column to 'idx'
+    index = stacked.index.rename(names="idx", level=-1)
+    new_df = pd.DataFrame(stacked, index=index, columns=[target_column])
+    return new_df
+
+new_df = split_data_frame_list(tweets_smell, index_column="id",  target_column="word_only_tokens")
+new_df.reset_index(inplace=True)
+tweets_smell_new = new_df.merge(tweets_smell, how='outer', on='id')
+# print(tweets_smell_new.columns)
+# print(tweets_smell_new.head())
+tweets_smell_new = tweets_smell_new[['id','idx','tweet', 'word_only_tokens_x', 'word_only_tokens_y', 'tweets_tokens','date', 'time','timezone','user_id','mentions','urls', 'hashtags',
+                                         'place','hashtags', 'near']]
+
+
+# print(len(tweets_smell_new))   #106837 which is larger than 6089
+
+
+"""-----------------------------------------------------Processing tweets----------------------------------------------"""
+
+
+"""remove all unimportant symbols in tweets"""
+tweets_smell['processed_tweets'] = [t.lower() for t in tweets_smell.tweet.values]
+tweets_smell['processed_tweets'] = tweets_smell_no_hash_mentions = [re.sub("(@[A-Za-z0-9]+)|(#[A-Za-z0-9]+)", " ", t) for t in tweets_smell['processed_tweets'].values]
+tweets_smell['processed_tweets'] = [re.sub("[\.\,\!\?\:\;\-\=]"," ", t) for t in tweets_smell['processed_tweets'].values]
+tweets_smell['processed_tweets'] = [re.sub(r'[  ]+',' ', t) for t in tweets_smell['processed_tweets'].values]
+tweets_smell['processed_tweets'] = [re.sub(r'([^\s\w]|_)+', '', t) for t in tweets_smell['processed_tweets'].values]
+tweets_smell['processed_tweets'] = [re.sub(r'[^\x00-\x7F]','', t) for t in tweets_smell['processed_tweets'].values]
+
+
+tweets_word_character = [regexp_tokenize(t, pattern1) for t in tweets_smell['processed_tweets']]
+tweets_word_character
+def remove_stopwords(text):
+    words = [w for w in text if w not in stopwords.words('english')]
+    return words
+tweets_remove_stops = [remove_stopwords(t) for t in tweets_word_character]
+
+#retaining alphabetic words
+def alpha_only(text):
+    alpha_only = [w for w in text if w.isalpha()]
+    return alpha_only
+tweets_alpha_only = [alpha_only(t) for t in tweets_remove_stops]
+
+tweets_pos = [nltk.pos_tag(t) for t in tweets_alpha_only]
+
+
+"""----------------------------------------------Setting up searching patterns----------------------------------"""
+
+
+
+
+#Creating pattern that capture words after "smell of"
+p1 = re.compile(r'(?:smell of )((\w+ ){2})')
+m = [p1.search(t) for t in tweets_smell['processed_tweets']]
+
+#Creating pattern that capture words after "smell like"
+p2 = re.compile(r'(?:smell like )((\w+ ){2})')
+n = [p2.search(t) for t in tweets_smell['processed_tweets']]
+
+#Creating pattern that capture words before "smell"
+
+p3 = re.compile(r'(\w+ )(?=smell)',re.IGNORECASE)
+o = [p3.search(t) for t in tweets_smell['processed_tweets']]
+
+
+print(len(o))
+print(len(n))
+
+
+def match(matches):
+    matcheds = []
+    for i in range(len(matches)):
+        if matches[i] is not None:
+            matched = matches[i].group(1)
+            matcheds.append(matched)
+        else:
+            matcheds.append(None)
+    return matcheds
+
+matcheds1=match(m)
+matcheds2=match(n)
+matcheds3=match(o)
+print(len(matcheds3))
+
+
+extracted_df1=pd.DataFrame()
+extracted_df1['id']=tweets_smell['id']
+extracted_df1['matched_words']=matcheds1
+extracted_df1['pos'] = tweets_pos
+
+extracted_df2=pd.DataFrame()
+extracted_df2['id']=tweets_smell['id']
+extracted_df2['matched_words']=matcheds2
+extracted_df2['pos'] = tweets_pos
+
+extracted_df3=pd.DataFrame()
+extracted_df3['id']=tweets_smell['id']
+extracted_df3['matched_words']=matcheds3
+extracted_df3['pos'] = tweets_pos
+
+# print(extracted_df3.head())
+
+extracted = extracted_df1.dropna()
+extracted2 = extracted_df2.dropna()
+extracted3 = extracted_df3.dropna()
+print(len(extracted3))
+# print(extracted3.head())
+
+
+#create dictionary of pos tags and add it to extracted dataframe
+
+def pos_dic(df_column):
+    pos_dicts = []
+    for i in range(len(df_column)):
+        dic1 = [dict((k,v) for k, v in df_column.iloc[i])]
+        pos_dicts.append(dic1)
+    return pos_dicts
+pos_dicts1=pos_dic(extracted['pos'])
+pos_dicts2=pos_dic(extracted2['pos'])
+pos_dicts3=pos_dic(extracted3['pos'])
+# print(pos_dicts1)
+
+extracted['pos_dict']=pos_dicts1
+extracted2['pos_dict']=pos_dicts2
+extracted3['pos_dict']=pos_dicts3
+print(len(extracted3))
+
+# print(extracted3.head())
+
+
+# Extract nouns from matched   for pattern 1 and 2
+def smell_trigger(df_column):
+    dicts = {}
+    for i in range(len(df_column)):
+        a = df_column['matched_words'].iloc[i].split()
+        b = df_column['pos_dict'].iloc[i][0]
+        for key in a:
+            if b.get(key) != 'NN' and 'NNS':
+                a.remove(key)
+                dic = {df_column['id'].iloc[i]: a[0]}
+                dicts.update(dic)
+    return dicts
+
+
+# Extract nouns from matched    for pattern 3   因为pattern3是smell 前一个词
+
+
+# extracted['matched_words'].iloc[0].split()
+def smell_trigger1(df_column):
+    dicts = {}
+    for i in range(len(df_column)):
+        a = df_column['matched_words'].iloc[i]
+        b = df_column['pos_dict'].iloc[i][0]
+        if b.get(a) == 'NN' or 'NNS':
+            dic = {df_column['id'].iloc[i]: a}
+            dicts.update(dic)
+    return dicts
+
+
+triggers_dict = smell_trigger(extracted)
+triggers_dict2 = smell_trigger(extracted2)
+triggers_dict3 = smell_trigger1(extracted3)
+# print(triggers_dict3)
+
+# creat a list consisting of smell triggers and add to the df as a column
+def trigger_lists(df_column, trigger_dic):
+    trigger_list = []
+    for key in df_column['id']:
+        if key in trigger_dic.keys():
+            trigger_list.append(trigger_dic.get(key))
+        else:
+            trigger_list.append(np.nan)
+    return trigger_list
+
+
+#Creating dictionary of triggers with tweet ids
+trigger_list1=trigger_lists(extracted, triggers_dict)
+trigger_list2=trigger_lists(extracted2, triggers_dict2)
+trigger_list3=trigger_lists(extracted3,triggers_dict3)
+
+#add trigger column to original tweets dataframe
+trigger_whole1=trigger_lists(tweets_smell, triggers_dict)
+trigger_whole2=trigger_lists(tweets_smell, triggers_dict2)
+trigger_whole3=trigger_lists(tweets_smell, triggers_dict3)
+tweets_smell['triggers']=trigger_whole1
+tweets_smell['triggers2']=trigger_whole2
+tweets_smell['triggers3']=trigger_whole3
+
+
+
+# print(tweets_smell.triggers3.unique())
+
+stopwords = ['the ', 'i ', 'and ','less ','now ','we ','always ','you ','gonna ','can ','that ',
+             'to ','why ','still ','of ','yah ','just ','could ','mmm ','any ','like ','else ',
+             'doesnt ','aa ','will ','u ','any ','what ','cant ','gotta ','really ','wanna ','n ',
+             'they ','2 ','not ','all ','he ','stop ','gonn ','ang ','even ','who ','also ','t ',
+             'pass ','almost ','should ','try ','feel ','capture ','didnt ','on ','a ','couldnt ',
+             'mmm ','some ','probably ','did ', 'had ','go ','so ','is ','lo ' ,'xd ','yr ','youll ',
+             'was ','then ','must ','very ','ok ','have','th ','pon ','got ','she ','nver ','hahahahahah ',
+            'hahhahaa ', 'find ','ya ','hahahahaha ', 'including ', 'be ', '4thr4h ', 'after ',
+            'intro', 'ever','kept','liao','nommmmm','centre','hm','woo','ah','cmon','sia','nah','comu8uwsvrttu ',' ',
+             'hahahahahahahahhaha ', 'sudden','cb','bbys','fking','la','at','she','but','mee','tat','is',
+            'in','for','no','and','not','https','so','just','i','aku','with','wd40','make','out',
+            'ew','still','sia','7jib','all','really','who','makes','something','kt','moth','lj',
+             'its','hrz','im','oh','put','or','somthing','cut','get','pic','wait','put',
+            'rn','hrz','bae','eh']
+
+
+def remove_stops(df_column):
+    new_triggers = []
+    for i in range(len(df_column)):
+        if df_column.iloc[i] not in stopwords:
+            new_triggers.append(df_column.iloc[i])
+        else:
+            new_triggers.append(np.nan)
+    return new_triggers
+
+new_trigger1 = remove_stops(tweets_smell['triggers'])
+new_trigger2 = remove_stops(tweets_smell['triggers2'])
+new_trigger3 = remove_stops(tweets_smell['triggers3'])
+
+tweets_smell['triggers']=new_trigger1
+tweets_smell['triggers2']=new_trigger2
+tweets_smell['triggers3']=new_trigger3
+
+# print(tweets_smell.head(20))
+
+tweets_smell.fillna("", inplace=True)
+all_triggers = []
+lines=[]
+print(type(tweets_smell['triggers'].iloc[0]))
+for i in range(len(tweets_smell)):
+    line = tweets_smell['triggers'].iloc[i]+' '+ tweets_smell['triggers2'].iloc[i]+ ' ' +tweets_smell['triggers3'].iloc[i]
+    lines.append(line)
+    all_triggers.append(lines)
+tweets_smell['all_triggers']=lines
+print(tweets_smell['all_triggers'].head(20))
+#
+# print(tweets_smell['all_triggers'].head(20))
+
+
+
+
+
+# for i in range(len(tweets_smell['all_triggers'])):
+#     alllist=[]
+#     if len(tweets_smell['all_triggers'].iloc[i].split()) !=0:
+#         alllist.append(tweets_smell['all_triggers'].iloc[i].split()[0])
+#     else:
+#         alllist.append(np.nan)
+#
+#
+#remove whitespaces at beginging and end
+tweets_smell['all_triggers'] = tweets_smell['all_triggers'].str.strip()
+
+"""----------------------------------------------Capturing @ in original tweets------------------------------------"""
+
+# tweets_smell.tweet.head(20)
+# pattern1 = r"#\w+"
+
+p4 = re.compile(r'(?:@\s*)(([A-Z][a-zA-Z]*\s|,|\d*)+)(?=^(https|http))?', re.IGNORECASE)
+
+p5 = re.compile(r'(?:@\s*)(((\d*\s*)+[A-Z][a-zA-Z]*\s|,|\d*)+)(?=^(https|http))?', re.IGNORECASE)
+p4_try = re.compile(r'(?:@\s*)(([A-Z][a-z]*\s|,|\d*)+)(?=^(https|http))?', re.IGNORECASE)
+# p4 = re.compile(r'\(((?:@\s*)(.*?))\)(?=^(https|http))?', re.IGNORECASE)
+
+y = [p4.search(t) for t in tweets_smell['tweet']]
+y1 = [p5.search(t) for t in tweets_smell['tweet']]
+y_try=[p4_try.search(t) for t in tweets_smell['tweet']]
+print(y)
+print(y1)
+print(y_try)
+
+matcheds4=match(y)
+print(matcheds4)
+potential_locations=pd.DataFrame()
+potential_locations['id']=tweets_smell['id']
+potential_locations['potential_locations']=matcheds4
+
+print(potential_locations)
+#
+tweets_smell_potentialLOC=pd.merge(tweets_smell, potential_locations, on="id")
+tweets_smell_potentialLOC.to_csv("tweets_smell_potentialLOC.csv", index=False)
+
+
+"""------------------------------------------------------Saving file----------------------------------------------"""
+
+# tweets_smell.to_csv("tweets_smell.csv", index=False)
+
+
+

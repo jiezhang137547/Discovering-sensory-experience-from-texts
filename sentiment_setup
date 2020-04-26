@@ -1,0 +1,5 @@
+import ner_recogniser_setup
+import pandas as pd
+tweets_smell = pd.read_csv("tweets_smell.csv")
+#replace nan with empty string
+tweets_smell["all_triggers"].fillna("", inplace=True)

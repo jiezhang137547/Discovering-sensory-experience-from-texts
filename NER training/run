@@ -1,0 +1,216 @@
+import csv
+import spacy
+from spacy import displacy
+from collections import Counter
+import en_core_web_sm
+nlp = en_core_web_sm.load()
+from spacy.matcher import PhraseMatcher
+import plac
+from pathlib import Path
+import random
+from tqdm import tqdm
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+tweets_smell = pd.read_csv("tweets_smell_potentialLOC.csv")
+
+x_train, x_test = train_test_split(tweets_smell,test_size=0.2)
+processed = x_train['tweet'].to_list()
+print(len(processed))
+
+
+
+"""-------------------------------------Creating list of locations for LOC labels------------------------------------"""
+
+
+LOCs = ['first centre','reflections at bukit chandu','bishan mrt','boon lay sec',
+        'hello kitty cafe', 'australian cafe', 'canteen','ritz','raffles city',
+        'woodlands checkpoint','sunway pyramid kuala lumpur','sentosa cove','harbourfront',
+        'wet market','sumang lrt station','sultan mosque','malay kueh stall','orchard gateway',
+        'marina south pier', 'one north','number76sg','city square mall',
+        'the fitness corner', 'world city','sanggarmustika','baker and cook','thomson medical',
+        'wine connections cheese bar', 'brotzeitsg', 'redmart','swee road','nee soon medical centre',
+        'marine parade library','bento stalls','korean fusion bbq','tiong bahru station',
+         'tanah merah', 'starbucks','botanic gardens', 'jurong island', 'bananaleaf',
+        'macpherson','foxhole cafe','raffles place','cecil','little india',
+        'geylang','china town','bukit timah','alexandra','golden mile','telok', 'buona vista',
+        'clarke quay', 'bugis','city hall','farrer park','river valley','balmoral',
+        'kampong glam','balestier', 'braddell', 'Central Perk',
+        'jurong east mrt', 'punggol','toa payoh','pasir pis','paya lebar','Singapore Art Museum',
+       'ang mo kio', 'clementi','tanglin','bukit merah','siglap','flora',
+       'kallang','central area', 'novena','choa chu kang','joo chiat','upper east coast','jurong bird park',
+        'singapore infantry regiment','mandai crematorium columbarium','vivocity','velocity', 'river valley',
+        'harbourfront','Singapore EXPO Hall 6','The Populus Coffee & Food Co','Hotel Boss',
+        'speakers corner','The Cat Cafe ','infinite studios','SL II Muffin',
+       'civic district','siglap','outram','tampines central park', 'ulu pandan',
+       'choa chu kang', 'diary farm','hillview','lim chu kang', 'tengah','admiralty', 'ANDES by Astons',
+       'yio chu kang', 'seletar','mandai','emerald hill','The Warehouse Hotel','Bus Stop 05013',
+       'mount faber park','fish pool','wardah books','kampong chicken eating house','marina bay sands',
+       'singapore polytechnic','wakey wakey','tierra vue','beast  butterflies','woodlands street 13',
+       'gillman barracks', 'orchard road','jewel coffee','labrador nature and coastal walk','wanton',
+       'palawan beach','blk 38 upper boon keng road','sembawang army camp','putian flavor food','hyang to gol',
+       'man man  japanese unagi restaurant','tampines true fitness','ngee ann polytechnic','dona manis cake shop',
+       'grease monkey barber garage','tippling club','chir chir','woodlands checkpoint','The Lab SG',
+       'tanjong rhu prawn noodles','bendemeer market  food centre','komalas villas','loyang valley',
+       'kwan im thong hood cho temple','rochor centre','jalan bahar','khang guan','extra virgin pizza',
+       'bijin nabe  liang court','kranji secondary school','city beach resort','victoria concert hall',
+       'holland village mrt station','pasir ris park','woodlands waterfront','park mall','kith cafe',
+       'newton edge','white sands shopping centre','pasir ris mrt station','nanyang polytechnic',
+        'The 1925 Microbrewery & Restaurant',
+        'yishun st 72','marina bay casino','fajar hills','ite college east','japanese garden',
+       'books kinokuniya','acronis','brewerkz','shami banana','yoogane','sims avenue','coast and company',
+        'Kwan Im Thong Hood Cho Temple',
+        'manhatten fish market',  'marina square','tiong bahru bakery','foc restaurant','The Adriatic Pantry',
+        'marina coastal expressway mce','kovan 209 market & food centre','tanjong beach club','mavrx coffee apothecary',
+        'lazarus island','waterbank  at dakota','maison ikkoku','orchard central','orchard mrt station ns22',
+        ' floating platform marina bay','carlton city','parkland green east coast park ','suntec city',
+        'suntec singapore convention & exhibition centre','matts the chocolate shop',
+        'paya lebar square','towner road','koi sushi  izakaya','california fitness',
+        'mambo beach club','sengkang riverside park','raffles hospital','asia square tower 2','hilton','timberland',
+        'queensway shopping centre','abercrombie & fitch','grand hyatt','hometeamns clubhouse','louise 21st',
+        'sri veeramakaliamman temple','camden medical centre','nex singapore','greenridge shopping centre',
+        'sentosa beach','keluar baris','chang korean bbq','amber road','garrett popcorn','xinwang hong kong cafe',
+        'queenstown stadium','abc brickworks market & food centre','riders cafe','west coast park','wendys buangkok',
+        'yomenya goemon','moojaa mookata thai bbq steamboat','tuas south incineration plant', 'bedok mall', 'bedok 85',
+        'NEAsg','ghostbusters','the panic room', 'Bus Stop 46711','sentosa island universal studios','Stefani Parfumerie Sg',
+        'lau pa sat food court','choice cuts goods + coffee','singapore grand prix', 'the smell lab',
+        'palate sensations cooking','Parklane Shopping Mall','Bus Stop 77331','singapore university of social sciences',
+        'garden by the bay','skinny cakes in serangoon','beef sukiyaki don keisuke','siloso beach resort sentosa',
+        'EnergyOne Jurong','Jurong Point','Sakae Teppanyaki','Whisk Cafe SG',' The Fabulous Baker Boy','Home Team Academy',
+        'Alan Seafood','Daessiksin Korean Grill Bbq Waterwaypoint','Don Dae Bak','Block 135 Edgedale Plains','Blk 199c Punggol Field',
+        'HQ Singapore Civil Defence Force','Astor Green Condo','328 Katong Laksa','Basheer Graphic Books',
+        'The Strategy', 'River Safari','Nylon Coffee Roasters', 'Tiong Bahru Bakery','Jo Malone mbs', 'The Coffee Daily',
+        'Singapore Sports Hub', '4 Little Road', 'Adventure Cove Waterpark','Le Steak by Chef Amri',
+        'Temasek Polytechnic South Wing','The Peak Condomium', 'Singapore Indoor Stadium', 'Changi Airport',
+        'W Singapore Sentosa Cove','Saboten Japanese Cutlet','Ssik Sin Korean Grill BBQ Buffet',
+        'Chopsuey Cafe','Bar Bar Black Sheep in Singapore','The Merlion in Singapore','Holiday Inn Singapore','The French Stall',
+        'Robinsons Orchard','The Idea Lab','Pioneer MRT Station','24 Jalan Rukam',
+        'ITE College Central','Eastpoint Mall','The White Rabbit','The Smart Local HQ','Blk 258 Boon Lay Drive',
+        'library@orchard at Orchard Gateway','Bukit Panjang Plaza','Marina Bay Tower','11 Chin Bee Drive','4 Soon Lee Rd',
+        '38 Lim Tua Tow Road','Pool At The Bayshore','Block 141 Bukit Batok Street 11',
+        'Beach Road Food Centre','KBox at Cineleisure 8th Storey','Jiaxiang Pancake','Tanjong Rhu Suspension Footbridge',
+        'East Coast Park Beach','Pasir Ris Dr 6','441 Sin Ming Avenue','myVillage at Serangoon Garden','Clementi Bus Stop 12209',
+        'Makansutra Gluttons Bay','Yew Tee MRT','Jurong West St 41 Blk 464','Madras New Woodlands Restaurant',
+        '5 Star Corner', 'St Andrew Cathedral','Chomp Chomp Food Centre','Taman Jurong Market & Food Centre','Downtown East Blk A',
+        'City Link Mall','Singapore Expo Hall 6B','Hougang Kopitiam Blk 401','23 Woodlands Industrial Park E1','Jurong Regional Library',
+        '607 Amk Ave 4','Bincho at Hua Bee','Hong Lim Park','The Sail at Marina Bay','The Garden Slug','Blk 140 Bishan St 12',
+        'Leo Burnett Singapore','Fight Generation Gym','Jurong West St 52 Blk 520','Blk 856c Tampines','Blk 305 Shunfu road',
+        'The Line in Singapore','Ah Hung D24 Sultan Durian','Old Hen Coffee Bar','665A Study Corner','One Olive in Singapore'
+        ]
+LOCs = [item.lower() for item in LOCs]
+print(LOCs)
+tweets_smell.tweet = [item.lower() for item in tweets_smell.tweet.values]
+
+
+
+"""-------------------------------------------Training models----------------------------------------------"""
+
+label = 'LOC'
+matcher = PhraseMatcher(nlp.vocab)
+for i in LOCs:
+    matcher.add(label, None, nlp(i))
+def offseter(lbl, doc, matchitem):
+    o_one = len(str(doc[0:matchitem[1]]))
+    subdoc=doc[matchitem[1]:matchitem[2]]
+    o_two = o_one+len(str(subdoc))
+    return o_one, o_two, lbl
+
+
+# create the built-in pipeline components and add them to the pipeline
+    # nlp.create_pipe works for built-ins that are registered with spaCy
+if 'ner' not in nlp.pipe_names:
+    ner = nlp.create_pipe('ner')
+    nlp.add_pipe(ner, last=True)
+# otherwise, get it so we can add labels
+else:
+    ner = nlp.get_pipe('ner')
+
+
+
+#for lOC training - get positions of LOCs and their tokens
+res = []
+to_train_ents = []
+for i in range(len(processed)):
+    mnlp_line = nlp(processed[i])
+    matches = matcher(mnlp_line)
+    res = [offseter(label, mnlp_line, x) for x in matches]
+    to_train_ents.append((processed[i], dict(entities=res)))
+
+#for lOC training - reduce non lOC labeled data
+new_to_train_ents=[]
+for i in range(len(to_train_ents)):
+    if len(to_train_ents[i][1].get('entities'))!=0:
+        new_to_train_ent= to_train_ents[i]
+        new_to_train_ents.append(new_to_train_ent)
+        #     else:
+#         print("not found")
+#         to_train_ents.remove(to_train_ents[i][1])
+
+#
+print(new_to_train_ents)
+#
+# # train the recognizer
+# optimizer = nlp.begin_training()
+# other_pipes = [pipe for pipe in nlp.pipe_names if pipe != 'ner']
+# with nlp.disable_pipes(*other_pipes):
+#     i = 0
+#     for itn in range(20):
+#         print(i)
+#         losses = {}
+#         random.shuffle(new_to_train_ents)
+#         i = i + 1
+#         for item in new_to_train_ents:
+#             nlp.update([item[0]],
+#                        [item[1]],
+#                        sgd=optimizer,
+#                        drop=0.35,
+#                        losses=losses)
+#
+#
+#
+#
+#
+#
+def spacy_large_ner_after_train(document):
+    entity_dicts={}
+    for ent in nlp(document).ents:
+        dic = {ent.text.strip(): ent.label_}
+        entity_dicts.update(dic)
+    return entity_dicts
+#
+# """-------------------------------------------Testing the model on test data----------------------------------------------"""
+#
+# entities_dicts_test={}
+# for i in range(len(x_test['tweet'])):
+#     key = x_test['id'].iloc[i]
+#     entities = spacy_large_ner_after_train(x_test['tweet'].iloc[i])
+#     entities_dic={key:entities}
+#     entities_dicts_test.update(entities_dic)
+#
+"""-------------------------------------------Runing the model on dataset----------------------------------------------"""
+
+#creating dictionary containing all ids, location entities
+entities_dicts_all={}
+for i in range(len(tweets_smell['tweet'])):
+    key = tweets_smell['id'].iloc[i]
+    entities = spacy_large_ner_after_train(tweets_smell['tweet'].iloc[i])
+    entities_dic={key:entities}
+    entities_dicts_all.update(entities_dic)
+#
+
+print(entities_dicts_all)
+
+loc_list_for_combine = []
+for i in range(len(tweets_smell)):
+    if tweets_smell['id'].iloc[i] in entities_dicts_all.keys():
+        loc_list_for_combine.append(list(entities_dicts_all.get(tweets_smell['id'].iloc[i])))
+tweets_smell['LOC'] =loc_list_for_combine
+
+
+
+#convert a column made of list into string
+tweets_smell['LOC'] = [','.join(map(str, l)) for l in tweets_smell['LOC']]
+print(len(tweets_smell['LOC'].unique()))
+#
+tweets_smell.to_csv("tweets_location_trained_ner.csv", index=False)
